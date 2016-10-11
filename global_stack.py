@@ -1,235 +1,150 @@
 '''
 Use instaseis to generate a global stack
 '''
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 import numpy as np
-import obspy
 import instaseis
-# import Image
+import collections
+import functools
 
-def plot_global_stack(db_name,
-                      resolution_x = 1024,
-                      resolution_y = 768,
-                      starttime    = -1.,
-                      endtime      = -1.,
-                      filename     = 'global_stack.png',
-                      freqs        = (1./250., 1./10.),
-                      running_mean_window_length = 200.,
-                      waterlevel_percentile = 50.,
-                      depth        = 10):
-    """
-    Plot a global stack with a given resolution for a source at a given depth
 
-    :param db_name: filename for the instaseis database
-    :type  db_name: string
-    :param resolution_x: Size of the produced Image (x-component)
-    :type resolution_x: np.int
-    :param resolution_y: Size of the produced Image (y-component)
-    :type resolution_y: np.int
-    :param starttime: Starting time of the plot, default=event time
-    :param endtime: End time of the plot, default=length of db seismograms
-    :param freqs: Filtering frequencies in Hz.
-    :type  freqs: Either scalar for lowpass filter, or 2-element tuple for
-        bandpass
-    :param running_mean_window_length: Length of window for AGC in seconds,
-       default: 200. Can be adapted for different frequencies, is a hassle.
-    :param waterlevel_percentile: Percentile for the waterlevel of the AGC
-       default: 50. Higher values suppress noise, but also weaker phases.
-    :param depth: Depth of event in kilometers, default: 10.
-    """
+class memoized(object):
+    '''Decorator. Caches a function's return value each time it is called.
+    If called later with the same arguments, the cached value is returned
+    (not reevaluated).
+    '''
+    def __init__(self, func):
+        self.func = func
+        self.cache = {}
 
-    stf = np.array([0., 1., 0.])
+    def __call__(self, *args):
+        if not isinstance(args, collections.Hashable):
+            # uncacheable. a list, for instance.
+            # better to not cache than blow up.
+            return self.func(*args)
+        if args in self.cache:
+            return self.cache[args]
+        else:
+            value = self.func(*args)
+            self.cache[args] = value
+            return value
 
-    # Number of azimuths at which to calc. seismograms for the
-    # moment
-    nazi = 8
+    def __repr__(self):
+        '''Return the function's docstring.'''
+        return self.func.__doc__
 
-    # Open database
+    def __get__(self, obj, objtype):
+        '''Support instance methods.'''
+        return functools.partial(self.__call__, obj)
+
+
+def normalize(array):
+    minval = np.amin(array)
+    maxval = np.amax(array)
+
+    return (array - minval) / (maxval - minval)
+
+
+def get_npts(db, dt):
+    src = instaseis.Source(latitude=90.0,
+                           longitude=0.0,
+                           depth_in_m=0.0,
+                           m_rr=-1.670000e+28 / 1e7,
+                           m_tt=3.820000e+27 / 1e7,
+                           m_pp=1.280000e+28 / 1e7,
+                           m_rt=-7.840000e+27 / 1e7,
+                           m_rp=-3.570000e+28 / 1e7,
+                           m_tp=1.550000e+27 / 1e7)
+
+    rec = instaseis.Receiver(latitude=10, longitude=10)
+
+    st = db.get_seismograms(src, rec, components='RTZ',
+                            kind='displacement', dt=dt,
+                            remove_source_shift=True)
+
+    return st[0].stats.npts
+
+
+def plot_global_stack(db_name, depth=0.0, xres=1024, dt=1.0,
+                      waterlevel=1e-5, postfac=2,
+                      fnam=None, dpi=96, figsize=(10, 10)):
+
+    stack_R, stack_T, stack_Z, stats = calc_global_stack(db_name,
+                                                         depth,
+                                                         xres,
+                                                         dt)
+
+    npts = stack_R.shape[0]
+    ndist = stack_R.shape[2]
+
+    stack = np.zeros(shape=(ndist, npts, 3))
+    stack[:, :, 0] = np.log10(np.sum(abs(stack_T), axis=1).T + waterlevel)
+    stack[:, :, 1] = np.log10(np.sum(abs(stack_R), axis=1).T + waterlevel)
+    stack[:, :, 2] = np.log10(np.sum(abs(stack_Z), axis=1).T + waterlevel)
+
+    stack[:, :, 0] = normalize(stack[:, ::-1, 0]) * postfac
+    stack[:, :, 1] = normalize(stack[:, ::-1, 1]) * postfac
+    stack[:, :, 2] = normalize(stack[:, ::-1, 2]) * postfac
+
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_axes([0.1, 0.1, 0.85, 0.85])
+
+    ax.imshow(stack, aspect='auto',
+              interpolation='bicubic',
+              origin='lower',
+              extent=(0, 180, 0, float(stats.endtime)))
+
+    ax.set_xlabel('distance / degree')
+    ax.set_ylabel('time / seconds')
+
+    if not fnam:
+        plt.show()
+    else:
+        fig.savefig(fnam, dpi=dpi)
+        plt.close('all')
+
+
+@memoized
+def calc_global_stack(db_name, depth=0.0, ndist=1024, dt=1.0):
     db = instaseis.open_db(db_name)
 
-    # Since we're removing the STF, the seismograms are slightly
-    # shorter than the database
-    len_db = db.info.length - db.info.src_shift
+    nazi = 8
 
-    # Set starttime and endtime to 0 and DB length, if not set
-    if starttime==-1.:
-        starttime = 0
-    if endtime ==-1.:
-        endtime = len_db
+    dt = min([dt, db.info.dt])
 
-    print('len_db : %f' % len_db)
+    lats = np.linspace(start=-90., stop=90., num=ndist)
+    lons = np.linspace(start=-180, stop=180., num=nazi, endpoint=False)
 
-    if endtime > len_db:
-        print('WARNING: endtime is larger als database length!')
-        print('endtime:        %f'%endtime)
-        print('db.info.length: %f'%len_db)
-        print('Setting endtime to database length')
-        endtime = len_db
+    src = instaseis.Source(latitude=90.0,
+                           longitude=0.0,
+                           depth_in_m=0.0,
+                           m_rr=-1.670000e+28 / 1e7,
+                           m_tt=3.820000e+27 / 1e7,
+                           m_pp=1.280000e+28 / 1e7,
+                           m_rt=-7.840000e+27 / 1e7,
+                           m_rp=-3.570000e+28 / 1e7,
+                           m_tp=1.550000e+27 / 1e7)
 
-    # Set Resolution in latitude and time
-    dt = db.info.dt # (endtime - starttime) / (resolution_y)
-    print('Selected dt:                 %f s'%dt)
-    print('len_db / dt:                 %f' % (len_db / dt))
+    npts = get_npts(db, dt)
 
-    # Set number of azimuths to resolution_x/2, since we calculate from
-    # 0 to 180 degree and then mirror
-    ndist = int(resolution_x * 0.5)
-    print('Number of steps in latitude: %d'%ndist)
+    stack_R = np.zeros(shape=(ndist, nazi, npts))
+    stack_T = np.zeros(shape=(ndist, nazi, npts))
+    stack_Z = np.zeros(shape=(ndist, nazi, npts))
 
+    for ilat in range(0, ndist):
+        lat = lats[ilat]
 
-    sgs_data_Z = []
-    sgs_data_R = []
-    sgs_data_T = []
+        for ilon in range(0, nazi):
+            lon = lons[ilon]
+            rec = instaseis.Receiver(latitude=lat, longitude=lon,
+                                     network="AB", station="%d" % lon)
 
-    running_mean_window = np.ones((int(running_mean_window_length/dt),)) / \
-                          (running_mean_window_length / dt)
+            st = db.get_seismograms(src, rec, components='RTZ',
+                                    kind='velocity', dt=dt,
+                                    remove_source_shift=True)
 
-    #running_mean_window = np.hanning(int(running_mean_window_length / dt))
+            stack_R[ilat, ilon, :] = st.select(channel='*R')[0].data
+            stack_T[ilat, ilon, :] = st.select(channel='*T')[0].data
+            stack_Z[ilat, ilon, :] = st.select(channel='*Z')[0].data
 
-    for i in range(0, ndist):
-
-        src = instaseis.Source(latitude=          90.0,
-                               longitude=          0.0,
-                               depth_in_m=   depth*1E3,
-                               m_rr=      -1.670000e+28 / 1e7,
-                               m_tt=       3.820000e+27 / 1e7,
-                               m_pp=       1.280000e+28 / 1e7,
-                               m_rt=      -7.840000e+27 / 1e7,
-                               m_rp=      -3.570000e+28 / 1e7,
-                               m_tp=       1.550000e+27 / 1e7,
-                               origin_time=obspy.UTCDateTime(0),
-                               sliprate =  stf)
-
-        receiver = instaseis.Receiver(latitude=10, longitude=10,
-                                      network="AB", station="%d"%i)
-        component = 'R'
-        test = load_smgr_with_agc(db, src, receiver, component, dt,
-                                  freqs, running_mean_window,
-                                  waterlevel_percentile)
-
-        agc_R = np.zeros(test.shape)
-
-        agc_T = np.zeros(test.shape)
-
-        agc_Z = np.zeros(test.shape)
-
-        deg = (90.-i*(180./ndist))
-        print("distance: %d degree"%deg)
-        print(' moment source')
-        for j in range(0, nazi):
-            lon = j * (360./nazi) - 180.
-            print("  azimuth: %d degree"%lon)
-            receiver = instaseis.Receiver(latitude=deg, longitude=lon,
-                                          network="AB", station="%d"%i)
-
-            ## R-component
-            component = 'R'
-            agc_R += load_smgr_with_agc(db, src, receiver, component, dt,
-                                        freqs, running_mean_window,
-                                        waterlevel_percentile)
-
-            # T-component
-            component = 'T'
-            agc_T += load_smgr_with_agc(db, src, receiver, component, dt,
-                                        freqs, running_mean_window,
-                                        waterlevel_percentile)
-
-            # Z-component
-            component = 'Z'
-            agc_Z += load_smgr_with_agc(db, src, receiver, component, dt,
-                                        freqs, running_mean_window,
-                                        waterlevel_percentile)
-
-        print(' explosion source')
-        # Add one more explosion source to enhance P-waves
-        src = instaseis.Source(latitude=          90.0,
-                               longitude=          0.0,
-                               depth_in_m=   depth*1E3,
-                               m_rr=       1.000000e+28 / 1e7,
-                               m_tt=       1.000000e+28 / 1e7,
-                               m_pp=       1.000000e+28 / 1e7,
-                               m_rt=       0.000000e+27 / 1e7,
-                               m_rp=       0.000000e+28 / 1e7,
-                               m_tp=       0.000000e+27 / 1e7,
-                               origin_time=obspy.UTCDateTime(0),
-                               sliprate =  stf)
-
-        receiver = instaseis.Receiver(latitude=deg, longitude=lon,
-                                      network="AB", station="%d" % i)
-
-        # Z-component
-        component = 'Z'
-        agc_Z = agc_Z + load_smgr_with_agc(db, src, receiver, component, dt,
-                                           freqs, running_mean_window,
-                                           waterlevel_percentile) * 4
-
-        # R-component
-        component = 'R'
-        agc_R = agc_R + load_smgr_with_agc(db, src, receiver, component, dt,
-                                           freqs, running_mean_window,
-                                           waterlevel_percentile) * 4
-
-        sgs_data_R.append(agc_R)
-
-        sgs_data_T.append(agc_T)
-
-        sgs_data_Z.append(agc_Z)
-
-    # R-component
-    im_R = plot_to_image(sgs_data_R)
-
-    # T-component
-    im_T = plot_to_image(sgs_data_T)
-
-    # Z-component
-    im_Z = plot_to_image(sgs_data_Z)
-
-    # Merge the three components into one RGB image
-    # im_half = Image.merge('RGB', (im_T, im_R, im_Z))
-
-    # Mirror to get second half of globe, from 180 to 360 degrees
-    # im_full = Image.new('RGB', (resolution_x, resolution_y))
-    # im_full.paste(im_half, (0,0))
-    # im_full.paste(im_half.transpose(Image.FLIP_LEFT_RIGHT), (resolution_x/2, 0))
-
-    # im_full.save(filename)
-
-    return im_R, im_T, im_Z;
-
-
-def load_smgr_with_agc(db, src, receiver, component, dt, freqs,
-                       running_mean_window, waterlevel_percentile):
-
-    st = db.get_seismograms(source=src, receiver=receiver,
-                            components=component, dt=dt)
-
-    try:
-        if len(np.array(freqs)) == 2:
-            st.filter("bandpass", freqmin=freqs[0], freqmax=freqs[1])
-        else:
-            print('freqs should have 1 or 2 elements')
-
-    except TypeError:
-        st.filter("lowpass", freq=freqs)
-
-    running_mean = np.convolve(abs(st[0].data),
-                               running_mean_window,
-                               mode='same')
-
-    waterlevel = np.percentile(running_mean, waterlevel_percentile)
-
-    running_mean[running_mean<waterlevel] = waterlevel
-
-    agc = abs(st[0].data/running_mean)
-
-    return agc;
-
-
-def plot_to_image(sgs_data):
-    data = abs(np.asarray(sgs_data))
-    norm = (data - data.min()) / (data.max() - data.min())
-
-    return norm * 256.
-
-
-
+    return stack_R, stack_T, stack_Z, st[0].stats
