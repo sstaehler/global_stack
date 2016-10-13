@@ -1,3 +1,5 @@
+# global_stack
+Plot global stack from Instaseis seismograms
 
 ## Calculate stack
 
@@ -18,7 +20,7 @@ stack.plot()
 ```
 
 
-![png](output_3_0.png)
+![png](examples/output_3_0.png)
 
 
 
@@ -34,5 +36,5 @@ stack_from_dist.plot()
 ```
 
 
-![png](output_5_0.png)
+![png](examples/output_5_0.png)
 
