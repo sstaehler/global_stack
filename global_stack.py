@@ -65,12 +65,12 @@ def get_npts(db, dt):
     return st[0].stats.npts
 
 
-def plot_global_stack(db_name, depth=0.0, xres=1024, dt=1.0,
+def plot_global_stack(db_name, depth_in_m=0.0, xres=1024, dt=1.0,
                       waterlevel=1e-5, postfac=2,
                       fnam=None, dpi=96, figsize=(10, 10)):
 
     stack_R, stack_T, stack_Z, stats = calc_global_stack(db_name,
-                                                         depth,
+                                                         depth_in_m,
                                                          xres,
                                                          dt)
 
@@ -105,7 +105,7 @@ def plot_global_stack(db_name, depth=0.0, xres=1024, dt=1.0,
 
 
 @memoized
-def calc_global_stack(db_name, depth=0.0, ndist=1024, dt=1.0):
+def calc_global_stack(db_name, depth_in_m=0.0, ndist=1024, dt=1.0):
     db = instaseis.open_db(db_name)
 
     nazi = 8
@@ -117,7 +117,7 @@ def calc_global_stack(db_name, depth=0.0, ndist=1024, dt=1.0):
 
     src = instaseis.Source(latitude=90.0,
                            longitude=0.0,
-                           depth_in_m=0.0,
+                           depth_in_m=depth_in_m,
                            m_rr=-1.670000e+28 / 1e7,
                            m_tt=3.820000e+27 / 1e7,
                            m_pp=1.280000e+28 / 1e7,
