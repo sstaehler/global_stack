@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import instaseis
 import pickle
+from tqdm import tqdm
 
 __all__ = ["global_stack",
            "load"]
@@ -78,7 +79,7 @@ class global_stack():
         stack_T = np.zeros(shape=(self.ndist, nazi, npts))
         stack_Z = np.zeros(shape=(self.ndist, nazi, npts))
 
-        for ilat in range(0, int(self.ndist)):
+        for ilat in tqdm(range(0, int(self.ndist))):
             lat = lats[ilat]
 
             for ilon in range(0, nazi):
