@@ -109,16 +109,18 @@ class global_stack():
 
     def plot(self, waterlevel=1e-5, postfac=2,
              fnam=None, dpi=96, figsize=(10, 10),
-             fontsize=16, **kwargs):
+             fontsize=16, ax=None, **kwargs):
         """
         Plot global stack
 
         Keywords:
-        :type  waterlevel: float
+        :type  waterlevel: float or tuple of float
         :param waterlevel: minimum value of plot
-        :type postfac: float
+                           If tuple, the order is Z R T
+        :type postfac: float or tuple of float
         :param postfac: Factor with which stack is multiplied after
                         normalization. Saturates strong values.
+                        If tuple, the order is Z R T
         :type fnam: string, optional
         :param fnam: Filename in which stack is saved. If not given, the stack
                      is shown on screen. Choose type by extension!
@@ -128,6 +130,9 @@ class global_stack():
         :param figsize: Size of figure in centimeters
         :type fontsize: float
         :param fontsize: Font size for axis labels
+        :type ax: matplotlib.axes.Axes
+        :param ax: matplotlib axis to draw into. If None, a new figure is 
+                   created
 
         kwargs are legal :class:`~matplotlib.axes.Axes` kwargs
 
@@ -138,18 +143,31 @@ class global_stack():
         ndist = self.stack_R.shape[2]
 
         stack = np.zeros(shape=(ndist, npts, 3))
-        stack[:, :, 0] = np.sum(abs(self.stack_T), axis=1).T
-        stack[:, :, 1] = np.sum(abs(self.stack_R), axis=1).T
-        stack[:, :, 2] = np.sum(abs(self.stack_Z), axis=1).T
+        
+        if type(waterlevel) == tuple:
+            wl = waterlevel
+        else:
+            wl = (waterlevel, waterlevel, waterlevel)
+ 
+        if type(postfac) == tuple:
+            pf = postfac
+        else:
+            pf = (postfac, postfac, postfac)
+            
+        stack[:, :, 0] = np.sum(abs(self.stack_T), axis=1).T + wl[2]
+        stack[:, :, 1] = np.sum(abs(self.stack_R), axis=1).T + wl[1]
+        stack[:, :, 2] = np.sum(abs(self.stack_Z), axis=1).T + wl[0]
 
-        stack = np.log10(stack + waterlevel)
+        stack = np.log10(stack)
 
-        stack[:, :, 0] = _normalize(stack[:, ::-1, 0]) * postfac
-        stack[:, :, 1] = _normalize(stack[:, ::-1, 1]) * postfac
-        stack[:, :, 2] = _normalize(stack[:, ::-1, 2]) * postfac
+        stack[:, :, 0] = _normalize(stack[:, ::-1, 0]) * pf[2] # T
+        stack[:, :, 1] = _normalize(stack[:, ::-1, 1]) * pf[1] # R
+        stack[:, :, 2] = _normalize(stack[:, ::-1, 2]) * pf[0] # Z
 
-        fig = plt.figure(figsize=figsize)
-        ax = fig.add_subplot(111, **kwargs)
+        
+        if not ax:
+            fig = plt.figure(figsize=figsize)
+            ax = fig.add_subplot(111, **kwargs)
 
         ax.imshow(stack, aspect='auto',
                   interpolation='bicubic',
@@ -168,13 +186,14 @@ class global_stack():
         ax.tick_params(axis='both', which='major', labelsize=fontsize*0.8)
         ax2.tick_params(axis='both', which='major', labelsize=fontsize*0.8)
 
-        if not fnam:
-            plt.show()
-        else:
-            fig.savefig(fnam, dpi=dpi)
-            plt.close('all')
+        if not ax:
+            if not fnam:
+                plt.show()
+            else:
+                plt.savefig(fnam, dpi=dpi)
+                plt.close('all')
 
-        return fig
+        return ax
 
 
 def load(fnam):
